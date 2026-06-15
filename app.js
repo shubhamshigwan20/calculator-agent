@@ -26,8 +26,18 @@ Important:
 - Keep responses concise unless the user requests detailed explanations.`;
 
 const app = express();
+app.use(express.json());
 
 app.post("/ai", async (req, res) => {
+  const message = req?.body?.message;
+
+  if (typeof message !== "string" || message.trim() === "") {
+    return res.status(400).json({
+      error: "Missing or invalid request body",
+      details: 'Send JSON like: {"message":"What is 2 + 3?"}',
+    });
+  }
+
   const addition = tool(
     ({ num1, num2 }) => {
       return num1 + num2;
@@ -82,7 +92,7 @@ app.post("/ai", async (req, res) => {
       messages: [
         {
           role: "user",
-          content: req?.body?.message,
+          content: message,
         },
       ],
     },
@@ -92,6 +102,18 @@ app.post("/ai", async (req, res) => {
   const agentMessages = agentResult.messages;
   console.log(agentMessages);
   return res.status(200).json(agentMessages);
+});
+
+app.use((err, req, res, next) => {
+  if (err?.type === "entity.parse.failed") {
+    return res.status(400).json({
+      error: "Invalid JSON",
+      details:
+        "The request body could not be parsed. Make sure it is valid JSON, for example: {\"message\":\"What is 2 + 3?\"}",
+    });
+  }
+
+  return next(err);
 });
 
 app.listen(3000, () => {
