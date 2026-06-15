@@ -28,6 +28,9 @@ Important:
 const app = express();
 app.use(express.json());
 
+app.get("/", (req, res) => {
+  return res.status(200).json({ status: true, service: "calculator-agent" });
+});
 app.post("/ai", async (req, res) => {
   const message = req?.body?.message;
 
@@ -109,7 +112,7 @@ app.use((err, req, res, next) => {
     return res.status(400).json({
       error: "Invalid JSON",
       details:
-        "The request body could not be parsed. Make sure it is valid JSON, for example: {\"message\":\"What is 2 + 3?\"}",
+        'The request body could not be parsed. Make sure it is valid JSON, for example: {"message":"What is 2 + 3?"}',
     });
   }
 
