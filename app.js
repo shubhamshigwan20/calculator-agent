@@ -3,8 +3,10 @@ import { createAgent, initChatModel } from "langchain";
 import { z } from "zod";
 import { tool } from "@langchain/core/tools";
 import express from "express";
+import { MemorySaver } from "@langchain/langgraph";
 
-const SYSTEM_PROMPT = `You are an AI agent specialized in mathematical reasoning.
+const SYSTEM_PROMPT = [
+  `You are an AI agent specialized in mathematical reasoning.
 
 Available tools:
 - addition(num1, num2)
@@ -23,15 +25,97 @@ Important:
 - Never perform arithmetic in your own reasoning.
 - Always rely on tools for numerical computation.
 - Handle invalid operations gracefully.
-- Keep responses concise unless the user requests detailed explanations.`;
+- Keep responses concise unless the user requests detailed explanations.`,
+  `You are an AI agent specialized in greeting people with there name.
+  
+  Available tools:
+  - hello(name)
+  
+  Workflow:
+  1. Take name from user input.
+  2. Use hello tool
+  3. Produce a clear final answer.
+  
+  `,
+];
 
 const app = express();
 app.use(express.json());
 
+const addition = tool(
+  ({ num1, num2 }) => {
+    return num1 + num2;
+  },
+  {
+    name: "addition",
+    description: "Add two numbers together",
+    schema: z.object({ num1: z.number(), num2: z.number() }),
+  },
+);
+
+const multiplication = tool(
+  ({ num1, num2 }) => {
+    return num1 * num2;
+  },
+  {
+    name: "multiplication",
+    description: "Multiply num1 with num2",
+    schema: z.object({ num1: z.number(), num2: z.number() }),
+  },
+);
+
+const divide = tool(
+  ({ num1, num2 }) => {
+    return num1 / num2;
+  },
+  {
+    name: "divide",
+    description: "Divide num1 by num2",
+    schema: z.object({ num1: z.number(), num2: z.number() }),
+  },
+);
+
+const hello = tool(
+  ({ name }) => {
+    return `Hello your name is ${name}`;
+  },
+  {
+    name: "hello",
+    description: "A tool that returns a greeting with user name as a parameter",
+    schema: z.object({ name: z.string() }),
+  },
+);
+
+const checkpointer = new MemorySaver();
+
+const model = await initChatModel("llama-3.3-70b-versatile", {
+  modelProvider: "groq",
+  temperature: 0,
+  timeout: 600_000,
+  maxTokens: 10000,
+  streaming: true,
+  apiKey: process.env.GROQ_API_KEY,
+});
+
+const calculatorAgent = createAgent({
+  model,
+  tools: [addition, multiplication, divide],
+  systemPrompt: SYSTEM_PROMPT[0],
+  // checkpointer,
+});
+
+const memoryAgent = createAgent({
+  model,
+  tools: [hello],
+  systemPrompt: SYSTEM_PROMPT[1],
+  checkpointer,
+});
+
 app.get("/", (req, res) => {
   return res.status(200).json({ status: true, service: "calculator-agent" });
 });
-app.post("/ai", async (req, res) => {
+
+app.post("/calculator-agent", async (req, res) => {
   const message = req?.body?.message;
 
   if (typeof message !== "string" || message.trim() === "") {
@@ -41,56 +125,7 @@ app.post("/ai", async (req, res) => {
     });
   }
 
-  const addition = tool(
-    ({ num1, num2 }) => {
-      return num1 + num2;
-    },
-    {
-      name: "addition",
-      description: "Add two numbers together",
-      schema: z.object({ num1: z.number(), num2: z.number() }),
-    },
-  );
-
-  const multiplication = tool(
-    ({ num1, num2 }) => {
-      return num1 * num2;
-    },
-    {
-      name: "multiplication",
-      description: "Multiply num1 with num2",
-      schema: z.object({ num1: z.number(), num2: z.number() }),
-    },
-  );
-
-  const divide = tool(
-    ({ num1, num2 }) => {
-      return num1 / num2;
-    },
-    {
-      name: "divide",
-      description: "Divide num1 by num2",
-      schema: z.object({ num1: z.number(), num2: z.number() }),
-    },
-  );
-
-  const model = await initChatModel("llama-3.3-70b-versatile", {
-    modelProvider: "groq",
-    temperature: 0.5,
-    timeout: 600_000,
-    maxTokens: 10000,
-    streaming: true,
-    apiKey: process.env.GROQ_API_KEY,
-  });
-
-  const agent = createAgent({
-    model,
-    tools: [addition, multiplication, divide],
-    systemPrompt: SYSTEM_PROMPT,
-    // checkpointer,
-  });
-
-  const agentResult = await agent.invoke(
+  const agentResult = await calculatorAgent.invoke(
     {
       messages: [
         {
@@ -105,6 +140,36 @@ app.post("/ai", async (req, res) => {
   const agentMessages = agentResult.messages;
   console.log(agentMessages);
   return res.status(200).json(agentMessages);
+});
+
+app.post("/memory-agent", async (req, res) => {
+  const { message, threadId } = req.body;
+
+  if (typeof message !== "string" || message.trim() === "") {
+    return res.status(400).json({
+      error: "Missing or invalid request body",
+      details: 'Send JSON like: {"message":"What is 2 + 3?"}',
+    });
+  }
+  console.log("a45", checkpointer);
+
+  const agentResult = await memoryAgent.invoke(
+    {
+      messages: [
+        {
+          role: "user",
+          content: message,
+        },
+      ],
+    },
+    { configurable: { thread_id: threadId ?? "default" } },
+  );
+
+  const agentMessages = agentResult.messages;
+  console.log(agentMessages);
+  return res
+    .status(200)
+    .json({ messages: agentMessages, checkpoints: checkpointer });
 });
 
 app.use((err, req, res, next) => {
